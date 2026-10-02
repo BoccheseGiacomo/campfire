@@ -2,8 +2,6 @@
 
 A campfire simulated in the browser with WebGPU. The scene is a vertical 2D slice through a fire whose logs run along the unseen axis. The flame is not drawn or animated: what you see is the simulated gas, rendered from its temperature and soot.
 
-<p align="center"><img src="docs/fire.gif" width="320" alt="Simulated campfire"></p>
-
 **Live:** https://bocchesegiacomo.github.io/campfire/ (Chrome or Edge; needs WebGPU)
 
 ## What it does
