@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Campfire</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<main id="app">
+  <div id="stage">
+    <canvas id="view"></canvas>
+    <div id="ghost" hidden></div>
+    <div id="msg" hidden></div>
+  </div>
+  <aside id="panel">
+    <header>
+      <h1>Campfire</h1>
+      <p class="sub">2D slice · emergent combustion</p>
+    </header>
+
+    <section>
+      <h2>Wood</h2>
+      <div class="palette">
+        <div class="piece stick" data-size="0.025" title="Drag into the scene">
+          <span class="swatch"></span><span>Stick<br><small>2.5 cm</small></span>
+        </div>
+        <div class="piece log" data-size="0.05" title="Drag into the scene">
+          <span class="swatch"></span><span>Log<br><small>5 cm</small></span>
+        </div>
+      </div>
+      <p class="hint">Drag a piece into the scene. Drag pieces in the scene to move them.</p>
+    </section>
+
+    <section>
+      <h2>Fire</h2>
+      <dl class="stats">
+        <dt>Heat release</dt><dd id="sHRR">–</dd>
+        <dt>Burn rate</dt><dd id="sBurn">–</dd>
+        <dt>Peak gas T</dt><dd id="sTmax">–</dd>
+        <dt>Radiated by gas</dt><dd id="sRad">–</dd>
+        <dt>Wood left</dt><dd id="sMass">–</dd>
+        <dt>Since refuel</dt><dd id="sRefuel">–</dd>
+        <dt>Sim speed</dt><dd id="sSpeed">–</dd>
+      </dl>
+    </section>
+
+    <section>
+      <h2>View</h2>
+      <div class="seg" id="view-seg">
+        <button data-view="photo" class="on">Photoreal</button>
+        <button data-view="temperature">Temperature</button>
+      </div>
+      <select id="diag">
+        <option value="">Diagnostics…</option>
+        <option value="reaction">Heat release rate</option>
+        <option value="oxygen">Oxygen</option>
+        <option value="fuel">Fuel gas</option>
+        <option value="soot">Soot</option>
+        <option value="velocity">Velocity</option>
+      </select>
+      <label class="row">Exposure <input type="range" id="exposure" min="-3" max="3" step="0.1" value="0"></label>
+    </section>
+
+    <section>
+      <h2>Simulation</h2>
+      <div class="seg" id="speed-seg">
+        <button data-speed="0">Pause</button>
+        <button data-speed="0.25">¼×</button>
+        <button data-speed="0.5">½×</button>
+        <button data-speed="1" class="on">1×</button>
+      </div>
+      <div class="seg" id="quality-seg">
+        <button data-q="coarse">Coarse</button>
+        <button data-q="balanced" class="on">Balanced</button>
+        <button data-q="fine">Fine</button>
+      </div>
+    </section>
+
+    <section id="controls">
+      <h2>Physics</h2>
+      <!-- generated -->
+    </section>
+
+    <section class="buttons">
+      <button id="resetScene">Reset scene</button>
+      <button id="clearWood">Clear wood</button>
+      <button id="resetDefaults">Reset physics</button>
+    </section>
+  </aside>
+</main>
+<script type="module" src="js/main.js"></script>
+</body>
+</html>

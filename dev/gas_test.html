@@ -1,0 +1,172 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Gas solver test</title>
+<style>
+  body { margin: 0; background: #111; color: #ccc; font: 12px monospace; display: flex; gap: 12px; }
+  canvas { height: 96vh; aspect-ratio: 0.7; }
+  pre { white-space: pre-wrap; }
+</style>
+</head>
+<body>
+<canvas id="c" width="448" height="640"></canvas>
+<pre id="log"></pre>
+<script type="module">
+import { FluidSim } from '../js/fluid.js';
+import { Renderer } from '../js/render.js';
+import { MODES } from '../js/config.js';
+
+const log = (...a) => { document.getElementById('log').textContent += a.join(' ') + '\n'; };
+const qs = new URLSearchParams(location.search);
+const mode = MODES[qs.get('mode') || 'balanced'];
+const view = +(qs.get('view') || 1);
+const test = qs.get('test') || 'heater';
+window.LOG = log;
+
+const adapter = await navigator.gpu.requestAdapter({ powerPreference: 'high-performance' });
+const want = Math.min(12, adapter.limits.maxStorageBuffersPerShaderStage);
+const feats = adapter.features.has('timestamp-query') ? ['timestamp-query'] : [];
+const device = await adapter.requestDevice({ requiredFeatures: feats, requiredLimits: { maxStorageBuffersPerShaderStage: want } });
+device.addEventListener('uncapturederror', e => log('GPU ERROR', e.error.message));
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('webgpu');
+const format = navigator.gpu.getPreferredCanvasFormat();
+ctx.configure({ device, format });
+
+const sim = new FluidSim(device, mode);
+await sim.init();
+const ren = new Renderer(device, ctx, format);
+await ren.init(sim);
+log(`grid ${sim.nx}x${sim.ny} dx=${(sim.dx * 1000).toFixed(2)}mm H=${sim.height.toFixed(3)}m levels=${sim.levels.map(l => l.nx + 'x' + l.ny).join(',')}`);
+
+if (test === 'heater') {
+  sim.setParam('heaterX0', 0.32); sim.setParam('heaterX1', 0.38); sim.setParam('heaterY1', 0.03); sim.setParam('heaterT', 1200);
+} else if (test === 'burner') {
+  sim.setParam('burnerX0', 0.30); sim.setParam('burnerX1', 0.40);
+  sim.setParam('burnerFlux', +(qs.get('flux') || 0.01)); sim.setParam('burnerT', 600);
+  sim.setParam('heaterX0', 0.33); sim.setParam('heaterX1', 0.37); sim.setParam('heaterY1', 0.015); sim.setParam('heaterT', +(qs.get('ign') || 1300));
+}
+const pieces = new Float32Array(64 * 20);
+sim.uploadPieces(pieces, 0);
+ren.writeWood(new Float32Array(64 * 4));
+
+window.sim = sim;
+window.stats = { hrr: 0, rad: 0, frames: 0 };
+let paused = false;
+window.pause = v => paused = v;
+
+async function frame(nsteps) {
+  sim.writeParams();
+  ren.writeParams({ view, nPieces: 0, exposure: +(qs.get('exp') || 1), time: sim.time, tmax: 1800 });
+  const enc = device.createCommandEncoder();
+  sim.clearGeometry(enc);
+  const pass = enc.beginComputePass();
+  sim.encodeGeometry(pass);
+  for (let s = 0; s < nsteps; s++) sim.encodeStep(pass);
+  pass.end();
+  sim.encodeReadback(enc);
+  ren.encode(enc);
+  device.queue.submit([enc.finish()]);
+  sim.afterSubmit(({ acc: a }) => {
+    stats.hrr = a[512] / 1e3; stats.rad = a[513] / 1e3; stats.frames++;
+  });
+}
+
+// GPU timing of N steps
+window.bench = async (n = 100) => {
+  await device.queue.onSubmittedWorkDone();
+  const t0 = performance.now();
+  const enc = device.createCommandEncoder();
+  const pass = enc.beginComputePass();
+  for (let s = 0; s < n; s++) sim.encodeStep(pass);
+  pass.end();
+  device.queue.submit([enc.finish()]);
+  await device.queue.onSubmittedWorkDone();
+  return (performance.now() - t0) / n;
+};
+
+// test helpers (small batches: long submissions can hang integrated GPUs)
+window.H = {
+  steps: async (n) => {
+    for (let b = 0; b < n; b += 10) {
+      sim.writeParams();
+      const enc = device.createCommandEncoder(); sim.clearGeometry(enc); const pass = enc.beginComputePass();
+      sim.encodeGeometry(pass);
+      for (let s = 0; s < Math.min(10, n - b); s++) sim.encodeStep(pass);
+      pass.end(); device.queue.submit([enc.finish()]);
+      await device.queue.onSubmittedWorkDone();
+    }
+  },
+  divErr: async () => {
+    const nx = sim.nx, ny = sim.ny;
+    const [U, V, fx, fy, SQ] = await Promise.all(['U', 'V', 'fx', 'fy', 'SQ'].map(n => sim.readBuffer(n)));
+    let mx = 0, sum = 0;
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const iu = j * (nx + 1) + i, iv = j * nx + i;
+      const div = (fx[iu + 1] * U[iu + 1] - fx[iu] * U[iu] + fy[iv + nx] * V[iv + nx] - fy[iv] * V[iv]) / sim.dx;
+      const e = Math.abs(div - SQ[2 * (j * nx + i)]); mx = Math.max(mx, e); sum += e;
+    }
+    return [mx.toFixed(3), (sum / nx / ny).toExponential(2)];
+  },
+  blob: (y0 = 0.1, Tb = 900, r = 0.04) => {
+    const nx = sim.nx, ny = sim.ny; sim.reset();
+    const T = new Float32Array(nx * ny).fill(293.15);
+    for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+      const x = (i + .5) * sim.dx - 0.35, y = (j + .5) * sim.dx - y0;
+      if (x * x + y * y < r * r) T[j * nx + i] = Tb;
+    }
+    device.queue.writeBuffer(sim.buf.T, 0, T); device.queue.writeBuffer(sim.buf.T2, 0, T);
+  },
+  farV: async () => {
+    const nx = sim.nx, ny = sim.ny; const V = await sim.readBuffer('V');
+    let v = 0; for (let j = 0; j < ny; j++) for (let i = 0; i < 20; i++) v = Math.max(v, Math.abs(V[j * nx + i]));
+    return v.toFixed(3);
+  },
+  cycles: (c) => {
+    const orig = sim._vc || (sim._vc = sim.vcycle.bind(sim));
+    sim.vcycle = (pass) => { for (let k = 0; k < c; k++) orig(pass); };
+  },
+  profile: async (j0, js, is) => {
+    const [T, V] = await Promise.all(['T', 'V'].map(n => sim.readBuffer(n)));
+    return js.map(j => j + ': ' + is.map(i => T[j * sim.nx + i].toFixed(0) + '/' + V[j * sim.nx + i].toFixed(2)).join(' ')).join('\n');
+  },
+};
+if (qs.get('paused')) paused = true;
+// per-stage GPU timing (ms per step), averaged over n steps
+H.profile2 = async (n = 20) => {
+  const qset = device.createQuerySet({ type: 'timestamp', count: 14 * n });
+  const res = device.createBuffer({ size: 14 * n * 8, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+  const rd = device.createBuffer({ size: 14 * n * 8, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+  sim.writeParams();
+  const enc = device.createCommandEncoder();
+  let names;
+  for (let s = 0; s < n; s++) names = sim.encodeStepProfiled(enc, qset, s * 14);
+  enc.resolveQuerySet(qset, 0, 14 * n, res, 0);
+  enc.copyBufferToBuffer(res, 0, rd, 0, 14 * n * 8);
+  device.queue.submit([enc.finish()]);
+  await rd.mapAsync(GPUMapMode.READ);
+  const t = new BigInt64Array(rd.getMappedRange());
+  const sum = names.map(() => 0);
+  for (let s = 0; s < n; s++) names.forEach((_, g) => sum[g] += Number(t[s * 14 + 2 * g + 1] - t[s * 14 + 2 * g]) / 1e6);
+  rd.unmap();
+  const total = sum.reduce((a, b) => a + b, 0) / n;
+  return names.map((nm, g) => `${nm}: ${(sum[g] / n).toFixed(3)} ms`).join('\n') + `\ntotal ${total.toFixed(3)} ms/step`;
+};
+
+let last = performance.now(), acc = 0;
+function loop(now) {
+  const dt = Math.min(0.05, (now - last) / 1000); last = now;
+  if (!paused) {
+    acc += dt;
+    let n = Math.floor(acc / sim.dt);
+    n = Math.min(n, Math.ceil(0.034 / sim.dt));
+    acc -= n * sim.dt; if (acc > sim.dt) acc = 0;
+    frame(n);
+  }
+  requestAnimationFrame(loop);
+}
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
